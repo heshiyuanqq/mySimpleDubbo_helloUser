@@ -1,5 +1,7 @@
 package demo1;
 
+import java.util.concurrent.CountDownLatch;
+
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandlerContext;
@@ -31,6 +33,7 @@ public class RpcClient extends SimpleChannelInboundHandler<RpcResponse> {
     private int port;
     private RpcResponse response;
     private final Object obj = new Object();
+    private CountDownLatch latch=new CountDownLatch(2);
 
     public RpcClient(String host, int port) {
 	        this.host = host;
@@ -40,9 +43,10 @@ public class RpcClient extends SimpleChannelInboundHandler<RpcResponse> {
     @Override
     public void channelRead0(ChannelHandlerContext ctx, RpcResponse response) throws Exception {
 	        this.response = response;
-	        synchronized (obj) {
+	      /*  synchronized (obj) {
 	            	obj.notifyAll(); // 收到响应，唤醒线程
-	        }
+	        }*/
+	        latch.countDown();
     }
 
     @Override
@@ -62,18 +66,30 @@ public class RpcClient extends SimpleChannelInboundHandler<RpcResponse> {
 						                        	 channel.pipeline()
 								                            .addLast(new RpcEncoder(RpcRequest.class)) // 将 RPC 请求进行编码（为了发送请求）
 								                            .addLast(new RpcDecoder(RpcResponse.class)) // 将 RPC 响应进行解码（为了处理响应）
-								                            .addLast(RpcClient.this); // 使用 RpcClient 发送 RPC 请求
+								                            .addLast(RpcClient.this/*内部监听调用channelRead0*/); // 使用 RpcClient 发送 RPC 请求
 						                    }
 				                 })
 				                 .option(ChannelOption.SO_KEEPALIVE, true);
 			
+			            /**
+			             * 使用了obj的wait和notifyAll来等待Response返回，会出
+	                     * 现“假死等待”的情况：一个Request发送出去后，在obj.wait()调用之前可能Response就返回了，
+	                     * 这时候在channelRead0里已经拿到了Response并且obj.notifyAll()已经在obj.wait()之前调用了，
+	                     * 这时候send后再obj.wait()就出现了假死等待，客户端就一直等待在这里。使用CountDownLatch
+	                     * 可以解决这个问题。
+			             */
 			            ChannelFuture future = bootstrap.connect(host, port).sync();
 			            future.channel().writeAndFlush(request).sync();
-			
+			/*
 			            synchronized (obj) {
 			                	obj.wait(); // 未收到响应，使线程等待
 			            }
+			            */
+			            latch.await();
 			
+			            
+			           
+			            
 			            if (response != null) {
 			                	future.channel().closeFuture().sync();
 			            }
